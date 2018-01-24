@@ -20,7 +20,16 @@ from aiotg.bot import BotApiError
 MESSAGE_TEMPLATE = \
     """%s написал комментарий к задаче %s:
 
-%s"""
+%s
+
+"""
+
+MESSAGE_CHANGE_TEMPLATE = \
+    """%s обновил задачу %s:
+
+%s
+
+"""
 
 dotenv.load()
 
@@ -80,6 +89,17 @@ class PytrackTelegramBot(object):
             comment['issueId'], YOUTRACK_BASE_URL)
         return MESSAGE_TEMPLATE % (mention, issue_link, comment['text'])
 
+    def render_change_message(self, mention, issue, change):
+        issue_link = "[{0}]( {1}/issue/{0} )".format(
+            issue['id'], YOUTRACK_BASE_URL)
+        updated_tmpl = "- {0}: {1} -> {2}"
+        updates = [updated_tmpl.format(field.name,
+                                       field.old_value[0],
+                                       field.new_value[0])
+                   for field in change.fields]
+        updates = "\n".join(updates)
+        return MESSAGE_CHANGE_TEMPLATE % (mention, issue_link, updates)
+
     async def post_comment(self, comment):
         async with self.db_pool.acquire() as conn:
             project_id = comment['issueId'].split('-')[0]
@@ -94,28 +114,65 @@ class PytrackTelegramBot(object):
                 await chat.send_text(message, parse_mode='Markdown')
             except BotApiError:
                 self.logger.warning(
-                    "Cannot send message '%s' as markdown", message)
+                    "Cannot send message '%s' as markdown, resending as text",
+                    message)
                 await chat.send_text(message)
             await db.set_comment_posted(conn, comment)
 
-    async def check_issue(self, issue):
-        self.logger.info("Checking issue %s", issue['id'])
+    async def post_change(self, issue, change):
         async with self.db_pool.acquire() as conn:
-            comments = await self.connection.get_comments(issue['id'])
-            last_checked = 0
-            for comment in comments:
-                posted = await db.check_comment(conn, comment)
-                if posted:
+            project_id = issue['id'].split('-')[0]
+            chat_id = await db.get_project_chat_id(conn, project_id)
+            user = await db.get_user(conn, change.updater_name)
+            mention = self.create_mention(user)
+            message = self.render_change_message(mention, issue, change)
+            self.logger.info("Posting issue %s change to chat %s",
+                             issue['id'], chat_id)
+            chat = self.bot.channel(chat_id)
+            try:
+                await chat.send_text(message, parse_mode='Markdown')
+            except BotApiError:
+                self.logger.warning(
+                    "Cannot send message '%s' as markdown, resending as text",
+                    message)
+                await chat.send_text(message)
+
+    async def check_issue(self, issue, last_updated):
+        self.logger.info("Checking issue %s", issue['id'])
+        last_checked = 0
+        project_id = issue['id'].split('-')[0]
+        async with self.db_pool.acquire() as conn:
+            if issue['commentsCount']:
+                comments = await self.connection.get_comments(issue['id'])
+                for comment in comments:
+                    posted = await db.check_comment(conn, comment)
+                    if posted:
+                        continue
+                    updated = comment.get(
+                        'updated', comment.get('created', '0'))
+                    updated = int(updated)
+                    if updated <= last_updated:
+                        self.logger.info(
+                            'Skipping old comment %s', comment['id'])
+                        continue
+                    last_checked = max(last_checked, updated)
+                    await self.post_comment(comment)
+            changes = await self.connection.get_changes_for_issue(issue['id'])
+            for change in changes:
+                print(change)
+                updated = int(change.updated)
+                if updated <= last_updated:
+                    self.logger.info(
+                        'Skipping old change for issue %s', issue['id'])
                     continue
-                updated = comment.get('updated', comment.get('created', '0'))
-                updated = int(updated)
                 last_checked = max(last_checked, updated)
-                project_id = comment['issueId'].split('-')[0]
-                await self.post_comment(comment)
+                await self.post_change(issue, change)
             if last_checked > 0:
                 last_checked = datetime.datetime.fromtimestamp(
                     last_checked / 1000)
-                await db.set_last_updated(conn, project_id, last_checked)
+                await db.set_last_updated(conn,
+                                          project_id,
+                                          last_checked)
 
     async def check_project(self, project, limit=50):
         self.logger.info("Checking project %s", project['youtrack_id'])
@@ -130,10 +187,12 @@ class PytrackTelegramBot(object):
                     updated_after=int(
                         timestamp * 1000) if timestamp > 0 else None
                 )
+                self.logger.info("Got %s issues in project %s",
+                                 len(issues), project['youtrack_id'])
                 current += limit
                 issues_tasks = list(
-                    self.check_issue(issue)
-                    for issue in issues if int(issue['commentsCount']))
+                    self.check_issue(issue, timestamp * 1000)
+                    for issue in issues)
                 if issues_tasks:
                     await asyncio.wait(issues_tasks)
                 if len(issues) < limit:
