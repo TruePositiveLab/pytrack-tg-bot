@@ -84,21 +84,34 @@ class PytrackTelegramBot(object):
         else:
             return "@%s" % user['youtrack_id']
 
+    def create_issue_link(self, issue_id):
+        return "[{0}]({1}/issue/{0})".format(issue_id, YOUTRACK_BASE_URL)
+
     def render_message(self, mention, comment):
-        issue_link = "[{0}]({1}/issue/{0})".format(
-            comment['issueId'], YOUTRACK_BASE_URL)
-        return MESSAGE_TEMPLATE % (mention, issue_link, comment['text'])
+        return MESSAGE_TEMPLATE % (mention,
+                                   self.create_issue_link(comment['issueId']),
+                                   comment['text'])
 
     def render_change_message(self, mention, issue, change):
-        issue_link = "[{0}]( {1}/issue/{0} )".format(
-            issue['id'], YOUTRACK_BASE_URL)
         updated_tmpl = "- {0}: {1} -> {2}"
-        updates = [updated_tmpl.format(field.name,
-                                       field.old_value[0],
-                                       field.new_value[0])
-                   for field in change.fields]
+        updates = (updated_tmpl.format(field.name,
+                                       field.old_value[
+                                           0] if field.old_value else "n/a",
+                                       field.new_value[0] if field.new_value else "n/a")
+                   for field in change.fields)
         updates = "\n".join(updates)
-        return MESSAGE_CHANGE_TEMPLATE % (mention, issue_link, updates)
+        return MESSAGE_CHANGE_TEMPLATE % (mention,
+                                          self.create_issue_link(issue['id']),
+                                          updates)
+
+    async def try_post_markdown(self, chat, message):
+        try:
+            await chat.send_text(message, parse_mode='Markdown')
+        except BotApiError:
+            self.logger.warning(
+                "Cannot send message '%s' as markdown, resending as text",
+                message)
+            await chat.send_text(message)
 
     async def post_comment(self, comment):
         async with self.db_pool.acquire() as conn:
@@ -110,13 +123,7 @@ class PytrackTelegramBot(object):
             self.logger.info("Posting comment %s to chat %s",
                              comment['id'], chat_id)
             chat = self.bot.channel(chat_id)
-            try:
-                await chat.send_text(message, parse_mode='Markdown')
-            except BotApiError:
-                self.logger.warning(
-                    "Cannot send message '%s' as markdown, resending as text",
-                    message)
-                await chat.send_text(message)
+            await self.try_post_markdown(chat, message)
             await db.set_comment_posted(conn, comment)
 
     async def post_change(self, issue, change):
@@ -129,19 +136,37 @@ class PytrackTelegramBot(object):
             self.logger.info("Posting issue %s change to chat %s",
                              issue['id'], chat_id)
             chat = self.bot.channel(chat_id)
-            try:
-                await chat.send_text(message, parse_mode='Markdown')
-            except BotApiError:
-                self.logger.warning(
-                    "Cannot send message '%s' as markdown, resending as text",
-                    message)
-                await chat.send_text(message)
+            await self.try_post_markdown(chat, message)
+
+    async def post_new_issue(self, issue):
+        async with self.db_pool.acquire() as conn:
+            project_id = issue['id'].split('-')[0]
+            user = await db.get_user(conn, issue['reporterName'])
+            chat_id = await db.get_project_chat_id(conn, project_id)
+            mention = self.create_mention(user)
+            issue_link = self.create_issue_link(issue['id'])
+            summary = issue['summary']
+            issue_type = issue['Type']
+            assignee = issue.get('Assignee', None)
+            if assignee:
+                assignee_mention = self.create_mention(
+                    await db.get_user(conn, assignee))
+                message = f"{mention} создал задачу {issue_link}: {summary} с типом {issue_type}. Задача назначена на {assignee_mention}."
+            else:
+                message = f"{mention} создал задачу {issue_link}: {summary} с типом {issue_type}."
+            chat = self.bot.channel(chat_id)
+            await self.try_post_markdown(chat, message)
 
     async def check_issue(self, issue, last_updated):
         self.logger.info("Checking issue %s", issue['id'])
         last_checked = 0
         project_id = issue['id'].split('-')[0]
         async with self.db_pool.acquire() as conn:
+            created = int(issue['created'])
+            if created > last_updated:
+                # new issue
+                last_checked = max(last_checked, created)
+                await self.post_new_issue(issue)
             if issue['commentsCount']:
                 comments = await self.connection.get_comments(issue['id'])
                 for comment in comments:
