@@ -1,0 +1,21 @@
+version: '3'
+services:
+  postgres:
+    image: "postgres:9.6"
+    environment:
+      PGDATA: "/data/pgdata"
+    volumes:
+      - /data
+    restart: always
+  bot:
+    image: "pytrackbot:latest"
+    links:
+      - postgres
+    restart: always
+    environment:
+      YOUTRACK_BASE_URL:
+      YOUTRACK_LOGIN:
+      YOUTRACK_PASSWORD:
+      TELEGRAM_API_KEY:
+      POSTGRESQL_DSN: "postgresql://postgres@postgres:5432/postgres"
+
