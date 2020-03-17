@@ -148,9 +148,15 @@ class PytrackTelegramBot(object):
             summary = issue['summary']
             issue_type = issue['Type']
             assignee = issue.get('Assignee', None)
+            assignee_mention = None
             if assignee:
-                assignee_mention = self.create_mention(
-                    await db.get_user(conn, assignee))
+                try:
+                    assignee_mention = self.create_mention(
+                        await db.get_user(conn, assignee))
+                except:
+                    self.logger.warning("Could not create assignee mention")
+
+            if assignee_mention:
                 message = f"{mention} создал задачу {issue_link}: {summary} с типом {issue_type}. Задача назначена на {assignee_mention}."
             else:
                 message = f"{mention} создал задачу {issue_link}: {summary} с типом {issue_type}."
