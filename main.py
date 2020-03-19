@@ -69,14 +69,18 @@ class PytrackTelegramBot(object):
             await db.ensure_users_are_present(conn, users)
 
     async def run(self):
-        self.logger.info("Starting timer")
-        self.update_timer = aiotools.create_timer(
-            self.check_for_updates, 300.0)
+        #self.logger.info("Starting timer")
+        #self.update_timer = aiotools.create_timer(
+        #    self.check_for_updates, 300.0)
+        await self.check_for_updates(30)
 
     async def shutdown(self):
         self.logger.info("Shutting down")
-        self.update_timer.cancel()
-        await self.update_timer
+        del self.bot
+        await self.db_pool.close()
+        if self.update_timer:
+            self.update_timer.cancel()
+            await self.update_timer
 
     def create_mention(self, user):
         if user['tg_id']:
@@ -252,16 +256,16 @@ class PytrackTelegramBot(object):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s\t%(levelname)s\t%(message)s')
     loop = asyncio.get_event_loop()
     bot = PytrackTelegramBot()
     loop.run_until_complete(bot.init())
     loop.run_until_complete(bot.run())
-    try:
-        loop.run_forever()
-    finally:
-        loop.run_until_complete(bot.shutdown())
+    #try:
+    #    loop.run_forever()
+    #finally:
+    loop.run_until_complete(bot.shutdown())
     loop.close()
 
 

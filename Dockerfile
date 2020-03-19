@@ -15,4 +15,5 @@ ADD db /app/db
 VOLUME /app-data
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD python3 main.py
+CMD sh -c 'while true; do python3 main.py; sleep 60; done'
+
