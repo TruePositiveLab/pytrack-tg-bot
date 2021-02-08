@@ -5,7 +5,7 @@ asyncpg==0.14.0
 argh==0.26.2
 chardet==3.0.4
 dohq-youtrack==0.2.1.60
-httplib2==0.17.0
+httplib2==0.19.0
 idna==2.6
 pathtools==0.1.2
 PyYAML==3.12
