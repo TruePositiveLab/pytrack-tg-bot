@@ -8,6 +8,6 @@ dohq-youtrack==0.2.1.60
 httplib2==0.17.0
 idna==2.6
 pathtools==0.1.2
-PyYAML==3.12
+PyYAML==5.4
 tasky==0.8.1
 python-env==1.0.0
