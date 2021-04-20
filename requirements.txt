@@ -1,7 +1,7 @@
 aiohttp==3.6.2
 aiotg==1.0.0
 aiotools==0.5.0
-asyncpg==0.14.0
+asyncpg==0.21.0
 argh==0.26.2
 chardet==3.0.4
 dohq-youtrack==0.2.1.60
